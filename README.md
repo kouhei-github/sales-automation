@@ -1,182 +1,47 @@
-# sales-list — 営業リスト自動作成スキル
+# sales-automation
 
-Google Maps と求人ボックスから「業種 × エリア」で企業を集め、各社の HP を巡回して営業に必要な情報を抽出し、`営業リスト.xlsx` に業種ごとのシートで追記します。過去に取得した企業は保存しません。
+営業リストを自動作成する Claude Code スキル `sales-list` を管理するリポジトリです。
+このフォルダで Claude Code を起動すると、プロジェクトスキルとして `/sales-list` が使えます。
 
-## できること
-
-| 項目 | 取得元 |
-|---|---|
-| 会社名 / 電話番号 / 住所 / カテゴリ / 評価 | Google Maps（求人ボックス由来の企業も Google Maps で解決） |
-| HP URL | Google Maps の「ウェブサイト」 |
-| メールアドレス / お問い合わせページ | HP（トップ・会社概要・お問い合わせページ） |
-| 代表者名 / 本社住所 / 拠点・子会社・支店 / 資本金 / 設立 / 従業員数 / 事業内容 | HP の会社概要 |
-| 企業説明（サービス内容） | Claude が HP の抜粋を読んで 1〜2 文で執筆 |
-
-情報が見つからない項目は空欄のままです。推測で埋めることはしません。
-
-## 動作環境
-
-- macOS / Python 3（`playwright`, `openpyxl` が必要）
-- ブラウザはヘッドレス Chromium（画面は出ません）
-
-```bash
-python3 -c "import playwright, openpyxl; print('ok')"   # 依存確認
-python3 -m playwright install chromium                  # 未導入のとき
-```
-
-## スラッシュコマンドの使い方（Claude Code）
-
-Claude Code のプロンプトで `/sales-list` に続けて条件を書きます。引数は自由文で、順不同です。
+## 構成
 
 ```
-/sales-list <業種> [エリア] [件数] [シート名: ...] [出力先: ...]
+.claude/skills/sales-list/
+  SKILL.md              Claude が読む手順書（スラッシュコマンドの引数解釈〜Excel 出力まで）
+  README.md             使い方の詳細（スラッシュコマンド、手動実行、オプション、重複ルール）
+  scripts/
+    run.py              パイプライン本体 (collect / export)
+    search_gmaps.py     Google Maps 検索
+    search_kyujinbox.py 求人ボックス検索 → Google Maps で所在地・HP を解決
+    enrich.py           企業 HP 巡回（メール・代表者・資本金など）
+    extract_company.js  HP からの抽出ロジック（Playwright MCP からも利用可）
+    export_xlsx.py      Excel 追記と重複除外
+    show_for_summary.py 企業説明を書くための要約ビュー
+    common.py           共通処理（正規化・重複キー）
+  reference/
+    columns.md          列定義と抽出ルール
+    troubleshooting.md  失敗時の対処、Playwright MCP での手動補完
+営業リスト.xlsx           出力先（git 管理外）
+output/                  収集の中間ファイル（git 管理外）
 ```
 
-| 引数 | 書き方 | 省略時 |
-|---|---|---|
-| 業種（必須） | `塗装業` `歯科医院` `税理士事務所` | 無ければ Claude が聞き返す |
-| エリア | `東京都` `新宿区` `大阪市,堺市`（複数はカンマ区切り） | 全国（エリア指定なしで検索） |
-| 件数 | `100件` `50件` | 100 件 |
-| シート名 | `シート名: 塗装業_東京` | 業種と同じ |
-| 出力先 | `出力先: /path/to/営業リスト.xlsx` | カレントディレクトリの `営業リスト.xlsx` |
-
-### 例
+## 使い方
 
 ```
 /sales-list 塗装業 東京都 100件
 ```
-```
-/sales-list 歯科医院 横浜市 50件 シート名: 歯科_横浜
-```
-```
-/sales-list 税理士事務所 大阪府 出力先: ~/Desktop/営業リスト.xlsx
-```
 
-スラッシュコマンドを使わず、普通の文章で頼んでも同じスキルが起動します。
+詳細は [.claude/skills/sales-list/README.md](.claude/skills/sales-list/README.md) を参照してください。
 
-```
-東京都の外壁塗装業者の営業リストを100件作って
-```
+## 他のプロジェクトからも使いたい場合
 
-### 実行後に Claude が行うこと
-
-1. 業種・エリア・件数・シート名・出力先を確定し、最初の返信で明示します。
-2. 収集と HP 巡回をバックグラウンドで実行し、進捗（候補件数・HP 到達数）を報告します。100 件で 5〜15 分です。
-3. 新規企業が件数に足りなければ、エリア分割（東京都 → 区単位など）や同義語で追加収集します。上限に達して届かない場合は理由を報告します。
-4. 各社の HP 抜粋を読み、企業説明（サービス内容）を 1〜2 文で書きます。
-5. Excel に追記し、追加件数・重複除外件数・電話 / メール / HP / 代表者 / 資本金の充足数を報告します。
-
-### 続けて使うときの例
-
-同じ Excel に別の業種を追加する（シートが増える）:
-```
-/sales-list 歯科医院 東京都 100件
-```
-
-同じ業種でエリアを広げる（既存の企業は自動で除外され、新規だけが追記される）:
-```
-/sales-list 塗装業 神奈川県 100件
-```
-
-途中で止まった run を続きから再開する:
-```
-/sales-list 塗装業 東京都 100件 の続きを output/塗装業_2026-09-16 から再開して
-```
-
-### 実行前の確認
-
-- 出力先の Excel を Excel アプリで開いたままにしないでください（保存時にエラーになります）。
-- 初回は依存ライブラリの確認を Claude が行います。足りなければインストール方法を案内します。
-
-## 手動で実行する場合
+ユーザースキルとしてシンボリックリンクを置くと、どのフォルダからでも `/sales-list` が使えます。
 
 ```bash
-cd /Users/kohei/dev/cloudwin/sales-automation
-S=~/.claude/skills/sales-list/scripts
-mkdir -p output
-
-# 1) 収集 + HP 巡回（100 件で 5〜15 分）
-python3 $S/run.py collect --query "塗装業" --area "東京都" --target 100 --sheet "塗装業" --xlsx 営業リスト.xlsx
-
-# 2) (任意) 企業説明を書く材料を表示 → output/<run-dir>/descriptions.json を作成
-python3 $S/show_for_summary.py output/塗装業_2026-09-16 --offset 0 --limit 25
-
-# 3) Excel 出力（重複は自動で除外）
-python3 $S/run.py export --run-dir output/塗装業_2026-09-16 --sheet "塗装業" --xlsx 営業リスト.xlsx --limit 100
+ln -s /Users/kohei/dev/cloudwin/sales-automation/.claude/skills/sales-list ~/.claude/skills/sales-list
 ```
 
-### collect の主なオプション
+## 動作環境
 
-| オプション | 既定 | 説明 |
-|---|---|---|
-| `--query` | 必須 | 業種キーワード（塗装業 / 歯科医院 / 税理士事務所 …） |
-| `--area` | なし | エリア。`"新宿区,渋谷区,港区"` のようにカンマ区切りで複数指定可 |
-| `--target` | 100 | 目標件数（既存 Excel に無い新規企業の数） |
-| `--sheet` | query と同じ | シート名 |
-| `--xlsx` | `営業リスト.xlsx` | 出力ブック |
-| `--sources` | `gmaps,kb` | 収集元。Google Maps → 足りなければ求人ボックス |
-| `--kb-query` | query の末尾「業」を除いたもの | 求人ボックス用キーワード |
-| `--run-dir` + `--resume` | | 同じ run に追記して続きから実行 |
-| `--concurrency` | 4 | HP 巡回の並列数 |
-
-### export の主なオプション
-
-| オプション | 説明 |
-|---|---|
-| `--limit 100` | 追加件数を target ちょうどに揃える（既定は候補全件） |
-| `--min-fields N` | 電話 / メール / HP のうち N 個以上埋まっている企業だけ出力 |
-
-## 100 件に届かないとき
-
-Google Maps は 1 クエリあたり約 80〜120 件が上限です。すでに取得済みの業種で新規 100 件が必要な場合は、同じ run-dir にエリアや同義語を変えて追記します。
-
-```bash
-python3 $S/run.py collect --query "塗装業" --area "新宿区,渋谷区,港区,品川区" --target 100 \
-  --sheet "塗装業" --run-dir output/塗装業_2026-09-16 --resume
-python3 $S/run.py collect --query "外壁塗装" --area "東京都" --target 100 \
-  --sheet "塗装業" --run-dir output/塗装業_2026-09-16 --resume
-```
-
-## 重複除外のルール
-
-出力ブックの全シートを読み、次のいずれかが一致する企業は保存しません。
-
-- 会社名（株式会社・(株)・有限会社などの法人格と空白・記号を除いて比較）
-- HP のドメイン（SNS やポータルサイトは対象外）
-- 電話番号（数字のみで比較）
-
-## 出力ファイル
-
-```
-営業リスト.xlsx                     ← 業種名ごとのシート（19 列、ヘッダー固定・フィルタ付き）
-output/<シート名>_<日付>/
-  known.json        既存 Excel から読んだ既知企業（検索段階で除外に使用）
-  candidates.json   Google Maps / 求人ボックスから集めた候補
-  enriched.json     HP 巡回後の全項目
-  descriptions.json Claude が書いた企業説明（任意）
-  summary.json      件数・項目充足率・不足数
-```
-
-## 動作確認済みの結果（2026-09-16）
-
-| テスト | 結果 |
-|---|---|
-| Google Maps 検索（塗装業 東京都） | 住所・電話・HP・カテゴリを取得 |
-| 求人ボックス検索（塗装 東京都） | 社名を収集し、全社を Google Maps で住所・HP に解決 |
-| HP 巡回 11 社 | HP 到達 9、メール 5、代表者 6、資本金 5 |
-| 重複除外 | 同じ 11 社を再出力 → 全件除外 |
-| 100 件通しテスト（税理士事務所 東京都） | 7 分で 100 行追記。電話 89、HP 85、本社住所 82、問い合わせ 71、メール 20 |
-
-メールと資本金の充足率は業種に依存します（多くの HP はフォームのみ、士業は資本金なし）。
-
-## 困ったとき
-
-- 症状別の対処と Playwright MCP での手動補完: [reference/troubleshooting.md](reference/troubleshooting.md)
-- 列の定義と抽出ルール: [reference/columns.md](reference/columns.md)
-- 各スクリプトに `--headed` を付けるとブラウザを表示してデバッグできます。
-
-## 注意
-
-- Google Maps に短時間で大量アクセスすると一時的にブロックされることがあります。その場合は 10〜30 分空けるか `--concurrency 2` に下げてください。
-- `0078-` や `0800-` で始まる電話番号は Google 経由の転送番号のことがあります。
-- 「山田太郎税理士事務所」のような個人名の事務所は、名称から代表者を推定し「（事務所名より推定）」を付けています。
+- Python 3 + `playwright` + `openpyxl`
+- `python3 -m playwright install chromium`（初回のみ）
